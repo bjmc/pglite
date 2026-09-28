@@ -313,6 +313,92 @@ jobs:
           name: pglite-icu-full-node-v${{ matrix.node }}
           path: ./packages/pglite-icu-full/electric-sql-pglite-icu-full-*.tgz          
 
+  build-standalone:
+    name: Build standalone (non-JS) PGlite WASM module
+    runs-on: blacksmith-32vcpu-ubuntu-2204
+    env:
+      TZ: UTC
+    steps:
+      # a fresh checkout: the standalone build is out-of-tree and needs an unconfigured source tree
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Get postgres-pglite submodule hash
+        id: postgres-pglite-commit-id
+        run: echo "hash=$(git rev-parse HEAD:postgres-pglite)" >> "$GITHUB_OUTPUT"
+
+      - name: Get PGlite version
+        id: pglite-version
+        run: echo "version=$(pnpm -s pglite:version)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache standalone WASM build artifacts
+        id: standalone-cache
+        uses: actions/cache@v5
+        with:
+          path: packages/pglite-standalone/release
+          key: wasm-build-standalone-${{ steps.postgres-pglite-commit-id.outputs.hash }}-pglite-${{ steps.pglite-version.outputs.version }}
+
+      - name: Build standalone module if necessary
+        if: steps.standalone-cache.outputs.cache-hit != 'true'
+        run: pnpm wasm:build:standalone
+
+      - name: Upload standalone build artifacts to Github artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: pglite-standalone-release-files
+          path: ./packages/pglite-standalone/release/**
+          retention-days: 60
+
+  test-standalone:
+    name: Test standalone PGlite WASM module
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # native wasm exception handling (exnref) is not available before Node 22
+        node: [22.x, 24.x]
+      fail-fast: false
+    defaults:
+      run:
+        working-directory: ./packages/pglite-standalone
+    needs: [build-all, build-standalone]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+
+      - name: Download PGlite WASM build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: pglite-interim-build-files-node-v20.x
+          path: ./packages/pglite/release
+
+      - name: Download standalone build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: pglite-standalone-release-files
+          path: ./packages/pglite-standalone/release
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build dependencies
+        run: pnpm --filter "@electric-sql/pglite-standalone^..." build
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
   build-and-test-pglite-dependents:
     name: Build and Test packages dependent on PGlite
     runs-on: blacksmith-32vcpu-ubuntu-2204
