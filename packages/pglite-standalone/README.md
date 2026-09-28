@@ -36,8 +36,8 @@ In addition to `memory`, `malloc` and `free`:
 | Export | |
 | --- | --- |
 | `_initialize()` | WASI reactor initialization; call first. |
-| `pgl_fs_mkdir(path, mode) -> i32` | Create a directory in the in-memory filesystem. Returns 0, or a negative errno. |
-| `pgl_fs_write_file(path, buf, len, mode) -> i32` | Create a file in the in-memory filesystem. Returns 0, or a negative errno. |
+| `pgl_fs_load_tar(prefix, buf, len) -> i32` | Unpack an uncompressed tarball into the in-memory filesystem under `prefix`. Returns 0, or a negative errno. |
+| `pgl_fs_mkdir(path, mode) -> i32`, `pgl_fs_write_file(path, buf, len, mode) -> i32` | Create a single directory or file. Return 0, or a negative errno. |
 | `pgl_setPGliteActive(1)` | Must be called before `pgl_call_main`. |
 | `pgl_call_main(argc, argv) -> i32` | Run `main()` (single-user startup). |
 | `pgl_setPGliteExitStatus(value) -> i32` | Set the exit status, returning the previous one. |
@@ -55,7 +55,7 @@ In addition to `memory`, `malloc` and `free`:
 **Startup**
 
 1. Instantiate the module and call `_initialize()`.
-2. Populate the filesystem: unpack `pglite-standalone-fs.tar.gz` at `/`, and an initialized data directory at `/pglite/data`. The data directory can come from the JS build, e.g. `PGlite.dumpDataDir()`.
+2. Populate the filesystem with `pgl_fs_load_tar`: `pglite-standalone-fs.tar.gz` (decompressed) at `/`, and an initialized data directory at `/pglite/data`. The data directory can come from the JS build, e.g. `PGlite.dumpDataDir()`.
 3. Set the environment (through WASI) as in `defaultEnv` in `src/index.ts`, in particular `PGDATA=/pglite/data`.
 4. Call `pgl_setPGliteActive(1)`, then `pgl_call_main()` with `argv` = `/pglite/bin/postgres`, the `defaultStartParams` from `src/index.ts`, `-D /pglite/data` and the database name. It returns after startup, and `pgl_setPGliteExitStatus(-3)` must then return 99.
 5. Call `pgl_startPGlite()`.

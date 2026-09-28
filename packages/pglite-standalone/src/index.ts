@@ -1,7 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { gunzipSync } from 'node:zlib'
 import { WASI } from 'node:wasi'
-import { untar } from './tar.js'
 
 /**
  * Reference host for the standalone PGlite WASM module (built by
@@ -82,13 +81,7 @@ interface Exports {
   _initialize(): void
   malloc(size: number): number
   free(ptr: number): void
-  pgl_fs_mkdir(path: number, mode: number): number
-  pgl_fs_write_file(
-    path: number,
-    buf: number,
-    len: number,
-    mode: number,
-  ): number
+  pgl_fs_load_tar(prefix: number, tar: number, len: number): number
   pgl_setPGliteActive(value: number): number
   pgl_setPGliteExitStatus(value: number): number
   pgl_call_main(argc: number, argv: number): number
@@ -112,7 +105,6 @@ export class StandalonePGlite {
   #input = new Uint8Array(0)
   #readOffset = 0
   #output: Uint8Array[] = []
-  #dirs = new Set<string>()
 
   private constructor() {}
 
@@ -159,47 +151,16 @@ export class StandalonePGlite {
     return ptr
   }
 
-  #mkdir(path: string) {
-    if (this.#dirs.has(path)) return
-    const p = this.#cstr(path)
-    const rc = this.#ex.pgl_fs_mkdir(p, 0o700)
-    this.#ex.free(p)
-    if (rc !== 0) throw new Error(`mkdir ${path} failed (${rc})`)
-    this.#dirs.add(path)
-  }
-
-  #mkdirs(path: string) {
-    const parts = path.split('/').filter(Boolean)
-    for (let i = 1; i <= parts.length; i++) {
-      this.#mkdir('/' + parts.slice(0, i).join('/'))
-    }
-  }
-
   #loadTar(tarball: Uint8Array, prefix: string) {
-    const data =
+    const tar =
       tarball[0] === 0x1f && tarball[1] === 0x8b ? gunzipSync(tarball) : tarball
-    for (const entry of untar(data)) {
-      const rel = entry.name.replace(/^\.?\/+/, '').replace(/\/+$/, '')
-      if (!rel) continue
-      const path = (prefix === '/' ? '' : prefix) + '/' + rel
-      this.#mkdirs(path.slice(0, path.lastIndexOf('/')))
-      if (entry.type === 'directory') {
-        this.#mkdir(path)
-        continue
-      }
-      const p = this.#cstr(path)
-      const buf = this.#ex.malloc(Math.max(entry.data.length, 1))
-      this.#heap.set(entry.data, buf)
-      const rc = this.#ex.pgl_fs_write_file(
-        p,
-        buf,
-        entry.data.length,
-        entry.mode & 0o777 || 0o600,
-      )
-      this.#ex.free(buf)
-      this.#ex.free(p)
-      if (rc !== 0) throw new Error(`writing ${path} failed (${rc})`)
-    }
+    const p = this.#cstr(prefix)
+    const buf = this.#ex.malloc(Math.max(tar.length, 1))
+    this.#heap.set(tar, buf)
+    const rc = this.#ex.pgl_fs_load_tar(p, buf, tar.length)
+    this.#ex.free(buf)
+    this.#ex.free(p)
+    if (rc !== 0) throw new Error(`loading ${prefix} failed (errno ${-rc})`)
   }
 
   #start(startParams: string[], database: string) {
